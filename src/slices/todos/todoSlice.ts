@@ -1,13 +1,9 @@
 import { createAsyncThunk, createSlice, PayloadAction } from "@reduxjs/toolkit";
 import { todosApi } from "@/api/todos-api";
-import { ItemProps, ItemPropsMongo } from "@/types/todo-item";
-import { normalizeTodoData } from "@/utils/normailize-todo";
+import { fechTodosProps, ItemEditProps, ItemProps, ItemPropsMongo, responseProps } from "@/types/todo-item";
+import { normalizeData, normalizeTodoData } from "@/utils/normailize-todo";
 import { initialState } from "./initial-state";
-
-// action types
-// Document actions => procesada en los reducers, ejecutadas desde cualquier parte de la aplicacion
-// Initial actions => iniciar un flujo de acciones, se lanzan desde los componentes, nunca son procesados en los reducers, debe iniciar otras acciones
-// Event actions => son ejecutadas por otras acciones y se encargan de ejecutar otras funcione(s).
+import { authActions } from "../auth/authSlice";
 
 export const postTodo = createAsyncThunk(
   'todos/postTodoProcess',
@@ -15,17 +11,20 @@ export const postTodo = createAsyncThunk(
     thunkApi.dispatch(todoActions.addingItem(true));
     const response = await thunkApi.dispatch(todosApi.endpoints.addTodo.initiate(params));
     const responseData = response as { data: ItemPropsMongo };
-    thunkApi.dispatch(todoActions.add(normalizeTodoData([responseData.data])[0]));
+    const item = normalizeTodoData([responseData.data])[0]
+    thunkApi.dispatch(todoActions.add(item));
+    thunkApi.dispatch(todoActions.onOffItem(item));
+    thunkApi.dispatch(todoActions.onOffFocusItem(true));
     return responseData;
-});
+  });
 
 export const fetchTodos = createAsyncThunk(
   'todos/fetchTodosProcess',
-  async (params: string, thunkApi) => {
+  async (params: fechTodosProps, thunkApi) => {
     const response = await thunkApi.dispatch(todosApi.endpoints.getAllTodos.initiate(params));
     thunkApi.dispatch(normalizeTodos(response.data as ItemPropsMongo[]));
     return response;
-});
+  });
 
 export const normalizeTodos = createAsyncThunk(
   'todos/normalizeTodos',
@@ -33,7 +32,35 @@ export const normalizeTodos = createAsyncThunk(
     const dataNormalized = normalizeTodoData(data);
     thunkApi.dispatch(todoActions.load(dataNormalized));
     return null;
-});
+  });
+
+export const deleteTodo = createAsyncThunk(
+  'todos/deleteTodoProcess',
+  async (item: ItemProps, thunkApi) => {
+    thunkApi.dispatch(todoActions.remove(item.id));
+    const response = await thunkApi.dispatch(todosApi.endpoints.deleteTodo.initiate(item.id));
+    const responseData = response as Partial<responseProps>;
+    if (!responseData.isSuccess) {
+      thunkApi.dispatch(todoActions.rollbackTodo(item));
+      thunkApi.dispatch(authActions.message('Error: Fails deleting item'));
+      thunkApi.dispatch(authActions.errorSnackbar(true));
+      thunkApi.dispatch(authActions.typeAlert("error"));
+    }
+    return responseData;
+  });
+
+export const editTodo = createAsyncThunk(
+  'todos/editTodoProcess',
+  async (item: ItemEditProps, thunkApi) => {
+    thunkApi.dispatch(todoActions.remove(item.id));
+    const response = await thunkApi.dispatch(todosApi.endpoints.editTodo.initiate(item));
+    const responseData = response as Partial<responseProps>;
+
+    if (responseData.data) {
+      thunkApi.dispatch(todoActions.add(normalizeData(responseData.data)));
+    }
+    return responseData;
+  });
 
 const todoSlice = createSlice({
   name: 'todo',
@@ -54,7 +81,19 @@ const todoSlice = createSlice({
     remove: (state, action: PayloadAction<string>) => {
       const selectItemIndex = state.data.findIndex(item => item.id === action.payload);
       state.data.splice(selectItemIndex, 1);
-    }
+    },
+    rollbackTodo: (state, action: PayloadAction<ItemProps>) => {
+      const isUserAlreadyDefined = state.data.some(data => data.id === action.payload.id)
+      if (!isUserAlreadyDefined) {
+        state.data.push(action.payload)
+      }
+    },
+    onOffItem: (state, action: PayloadAction<ItemProps | null>) => {
+      state.activeItem = action.payload
+    },
+    onOffFocusItem: (state, action: PayloadAction<boolean | undefined>) => {
+      state.selectOnFocus = action.payload
+    },
   },
   extraReducers: (builder) => {
     builder.addCase(fetchTodos.pending, (state, action) => {
@@ -68,6 +107,7 @@ const todoSlice = createSlice({
     });
     builder.addCase(postTodo.fulfilled, (state, action) => {
       state.addingItem = false;
+      state.selectOnFocus = false;
     });
   }
 });
